@@ -45,18 +45,19 @@ CREATE OR REPLACE GIT REPOSITORY git_repo
 -- Make sure we get the latest files
 ALTER GIT REPOSITORY git_repo FETCH;
 
--- Setup stage for  docs
+-- Create an empty stage for docs
 create or replace stage docs 
 ENCRYPTION = (TYPE = 'SNOWFLAKE_SSE') DIRECTORY = ( ENABLE = true );
 
--- Copy the docs for bikes
+-- Copy the docs from folder to stage
 COPY FILES
     INTO @docs/
     FROM @MY_CORTEX_AGENT_DB.PUBLIC.git_repo/branches/main/docs/;
 
 ALTER STAGE docs REFRESH;
 
-
+-- What s is in my stage table
+LIST @MY_CORTEX_AGENT_DB.PUBLIC.docs
 
 /*********************************************************************************************************
 -- PART 2: Processing PDF
@@ -74,7 +75,7 @@ ALTER STAGE docs REFRESH;
 
 
 /***********************************************************************
--- What's in the directory
+-- What s in the directory
 ***********************************************************************/
 
 -- Preview documents
@@ -100,8 +101,13 @@ FROM
 WHERE
     RELATIVE_PATH LIKE '%.pdf';
 
+/*
+Juliette's Note: PARSE_DOCUMENT function with a smaller warehouse (no larger than MEDIUM) because larger warehouses do not increase performance. 
+https://docs.snowflake.com/en/user-guide/snowflake-cortex/aisql
+*/
+
 /***********************************************************************
--- What's in the new table
+-- What s in the new table
 ***********************************************************************/
 
 select * from RAW_TEXT limit 10;
@@ -134,7 +140,32 @@ INSERT INTO DOCS_CHUNKS_TABLE (relative_path, chunk, chunk_index)
            )) c;
 
 /***********************************************************************
--- What's in the new table
+-- Classify documents
+***********************************************************************/
+
+
+CREATE OR REPLACE TEMPORARY TABLE docs_categories AS 
+    WITH unique_documents AS (
+        SELECT DISTINCT relative_path, chunk
+        FROM docs_chunks_table
+        WHERE chunk_index = 0
+    ),
+
+    docs_category_cte AS (
+        SELECT
+        relative_path
+        , TRIM(snowflake.cortex.CLASSIFY_TEXT (
+            'Title:' || relative_path || 'Content:' || chunk, ['Bike', 'Snow']
+            )['label'], '"') AS category
+    FROM unique_documents
+    )
+
+    SELECT *
+    FROM docs_category_cte;
+
+
+/***********************************************************************
+-- What s in the new table
 ***********************************************************************/
 
 SELECT * FROM DOCS_CHUNKS_TABLE limit 10;
@@ -143,6 +174,9 @@ UPDATE docs_chunks_table
 SET category = docs_categories.category
 FROM docs_categories
 WHERE docs_chunks_table.relative_path = docs_categories.relative_path;
+
+SELECT * FROM DOCS_CHUNKS_TABLE limit 10;
+
 
 /*
 Note on Snowflake UPDATE syntax
@@ -169,17 +203,18 @@ What's about LEFT JOJN on UPDATE in Snowflake
 ***********************************************************************/
 
 INSERT INTO DOCS_CHUNKS_TABLE (relative_path, chunk, chunk_index, category)
-SELECT 
-    RELATIVE_PATH
-    , CONCAT('This is a picture describing the bike: '|| RELATIVE_PATH || 
+    SELECT RELATIVE_PATH
+    , CONCAT('This is a picture describing the bike: '|| RELATIVE_PATH || ' - ' ||
         'THIS IS THE DESCRIPTION: ' ||
         SNOWFLAKE.CORTEX.COMPLETE('claude-3-5-sonnet',
-        'DESCRIBE THIS IMAGE: ',
-        TO_FILE('@DOCS', RELATIVE_PATH))) AS chunk
-    , 0
-    , SNOWFLAKE.CORTEX.COMPLETE('claude-3-5-sonnet',
-        'Classify this image, respond only with Bike or Snow: ',
-        TO_FILE('@DOCS', RELATIVE_PATH)) AS category
+            'DESCRIBE THIS IMAGE: ',
+            TO_FILE('@DOCS', RELATIVE_PATH)
+        )
+    ) AS chunk
+    , 0 AS chunk_index
+    , SNOWFLAKE.CORTEX.COMPLETE('claude-3-5-sonnet'
+        , 'Classify this image, respond only with Bike or Snow: '
+        , TO_FILE('@DOCS', RELATIVE_PATH)) AS category
 FROM 
     DIRECTORY('@DOCS')
 WHERE
@@ -195,7 +230,7 @@ claude-3-5-sonnet
 
 
 /***********************************************************************
--- What's in the new table
+-- Whats in the new table
 ***********************************************************************/
 
 SELECT * FROM DOCS_CHUNKS_TABLE
@@ -210,13 +245,19 @@ Once we have processed all the content from PDFs and images into the DOCS_CHUNK_
 This will automatically create the embeddings, indexing, etc. 
 *********************************************************************************************************/
 
-CREATE WAREHOUSE IF NOT EXISTS DEFAULT_WH
+
+SHOW WAREHOUSES;
+
+
+-- Because this can be resource intensive, we may need a dedicated warehouse for this service
+CREATE WAREHOUSE IF NOT EXISTS DEDICATE_WH
 WAREHOUSE_SIZE = 'XSMALL';
+
 
 CREATE OR REPLACE CORTEX SEARCH SERVICE DOCUMENTATION_TOOL
 ON chunk
 ATTRIBUTES relative_path, category
-warehouse = DEFAULT_WH
+warehouse = COMPUTE_WH  -- or this a dedicated warehouse
 TARGET_LAG = '1 hour'
 EMBEDDING_MODEL = 'snowflake-arctic-embed-l-v2.0'
 AS (
