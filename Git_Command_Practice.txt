@@ -1,0 +1,22 @@
+git clone https://github.com/Juliette-Huyen/NAF_Demo.git
+
+mv old_filename.txt new_filename.txt
+mv "Git Command Practice.txt" Git_Command_Practice.txt
+
+git add Git_Command_Practice.txt
+
+
+  git config --global user.email "thuhuyentn@gmail.com"
+  git config --global user.name "Juliette-Huyen"'
+
+
+git checkout -b task-111-practice-branch
+
+Make more change to the file
+
+git remote rename origin upstream
+git remote add origin https://github.com/Juliette-Huyen
+
+
+git remote add origin https://github.com/Juliette-Huyen/NAF_Demo
+git remote add upstream https://github.com/Juliette-Huyen/NAF_Demo
