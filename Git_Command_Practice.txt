@@ -13,3 +13,10 @@ git add Git_Command_Practice.txt
 git checkout -b task-111-practice-branch
 
 Make more change to the file
+
+git remote rename origin upstream
+git remote add origin https://github.com/Juliette-Huyen
+
+
+git remote add origin https://github.com/Juliette-Huyen/NAF_Demo
+git remote add upstream https://github.com/Juliette-Huyen/NAF_Demo
